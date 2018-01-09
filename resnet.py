@@ -19,10 +19,10 @@ from keras.regularizers import l2
 from keras import backend as K
 
 
-def _bn_relu(input):
+def _bn_relu(input_data):
     """Helper to build a BN -> relu block
     """
-    norm = BatchNormalization(axis=CHANNEL_AXIS)(input)
+    norm = BatchNormalization(axis=CHANNEL_AXIS)(input_data)
     return Activation("relu")(norm)
 
 
@@ -36,11 +36,11 @@ def _conv_bn_relu(**conv_params):
     padding = conv_params.setdefault("padding", "same")
     kernel_regularizer = conv_params.setdefault("kernel_regularizer", l2(1.e-4))
 
-    def f(input):
+    def f(input_data):
         conv = Conv2D(filters=filters, kernel_size=kernel_size,
                       strides=strides, padding=padding,
                       kernel_initializer=kernel_initializer,
-                      kernel_regularizer=kernel_regularizer)(input)
+                      kernel_regularizer=kernel_regularizer)(input_data)
         return _bn_relu(conv)
 
     return f
@@ -57,8 +57,8 @@ def _bn_relu_conv(**conv_params):
     padding = conv_params.setdefault("padding", "same")
     kernel_regularizer = conv_params.setdefault("kernel_regularizer", l2(1.e-4))
 
-    def f(input):
-        activation = _bn_relu(input)
+    def f(input_data):
+        activation = _bn_relu(input_data)
         return Conv2D(filters=filters, kernel_size=kernel_size,
                       strides=strides, padding=padding,
                       kernel_initializer=kernel_initializer,
@@ -67,19 +67,19 @@ def _bn_relu_conv(**conv_params):
     return f
 
 
-def _shortcut(input, residual):
+def _shortcut(input_data, residual):
     """Adds a shortcut between input and residual block and merges them with "sum"
     """
     # Expand channels of shortcut to match residual.
     # Stride appropriately to match residual (width, height)
     # Should be int if network architecture is correctly configured.
-    input_shape = K.int_shape(input)
+    input_shape = K.int_shape(input_data)
     residual_shape = K.int_shape(residual)
     stride_width = int(round(input_shape[ROW_AXIS] / residual_shape[ROW_AXIS]))
     stride_height = int(round(input_shape[COL_AXIS] / residual_shape[COL_AXIS]))
     equal_channels = input_shape[CHANNEL_AXIS] == residual_shape[CHANNEL_AXIS]
 
-    shortcut = input
+    shortcut = input_data
     # 1 X 1 conv if shape is different. Else identity.
     if stride_width > 1 or stride_height > 1 or not equal_channels:
         shortcut = Conv2D(filters=residual_shape[CHANNEL_AXIS],
@@ -87,7 +87,7 @@ def _shortcut(input, residual):
                           strides=(stride_width, stride_height),
                           padding="valid",
                           kernel_initializer="he_normal",
-                          kernel_regularizer=l2(0.0001))(input)
+                          kernel_regularizer=l2(0.0001))(input_data)
 
     return add([shortcut, residual])
 
@@ -95,14 +95,14 @@ def _shortcut(input, residual):
 def _residual_block(block_function, filters, repetitions, is_first_layer=False):
     """Builds a residual block with repeating bottleneck blocks.
     """
-    def f(input):
+    def f(input_data):
         for i in range(repetitions):
             init_strides = (1, 1)
             if i == 0 and not is_first_layer:
                 init_strides = (2, 2)
-            input = block_function(filters=filters, init_strides=init_strides,
-                                   is_first_block_of_first_layer=(is_first_layer and i == 0))(input)
-        return input
+            input_data = block_function(filters=filters, init_strides=init_strides,
+                                   is_first_block_of_first_layer=(is_first_layer and i == 0))(input_data)
+        return input_data
 
     return f
 
@@ -111,7 +111,7 @@ def basic_block(filters, init_strides=(1, 1), is_first_block_of_first_layer=Fals
     """Basic 3 X 3 convolution blocks for use on resnets with layers <= 34.
     Follows improved proposed scheme in http://arxiv.org/pdf/1603.05027v2.pdf
     """
-    def f(input):
+    def f(input_data):
 
         if is_first_block_of_first_layer:
             # don't repeat bn->relu since we just did bn->relu->maxpool
@@ -119,13 +119,13 @@ def basic_block(filters, init_strides=(1, 1), is_first_block_of_first_layer=Fals
                            strides=init_strides,
                            padding="same",
                            kernel_initializer="he_normal",
-                           kernel_regularizer=l2(1e-4))(input)
+                           kernel_regularizer=l2(1e-4))(input_data)
         else:
             conv1 = _bn_relu_conv(filters=filters, kernel_size=(3, 3),
-                                  strides=init_strides)(input)
+                                  strides=init_strides)(input_data)
 
         residual = _bn_relu_conv(filters=filters, kernel_size=(3, 3))(conv1)
-        return _shortcut(input, residual)
+        return _shortcut(input_data, residual)
 
     return f
 
@@ -137,7 +137,7 @@ def bottleneck(filters, init_strides=(1, 1), is_first_block_of_first_layer=False
     Returns:
         A final conv layer of filters * 4
     """
-    def f(input):
+    def f(input_data):
 
         if is_first_block_of_first_layer:
             # don't repeat bn->relu since we just did bn->relu->maxpool
@@ -145,14 +145,14 @@ def bottleneck(filters, init_strides=(1, 1), is_first_block_of_first_layer=False
                               strides=init_strides,
                               padding="same",
                               kernel_initializer="he_normal",
-                              kernel_regularizer=l2(1e-4))(input)
+                              kernel_regularizer=l2(1e-4))(input_data)
         else:
             conv_1_1 = _bn_relu_conv(filters=filters, kernel_size=(1, 1),
-                                     strides=init_strides)(input)
+                                     strides=init_strides)(input_data)
 
         conv_3_3 = _bn_relu_conv(filters=filters, kernel_size=(3, 3))(conv_1_1)
         residual = _bn_relu_conv(filters=filters * 4, kernel_size=(1, 1))(conv_3_3)
-        return _shortcut(input, residual)
+        return _shortcut(input_data, residual)
 
     return f
 
@@ -207,8 +207,8 @@ class ResnetBuilder(object):
         # Load function from str if needed.
         block_fn = _get_block(block_fn)
 
-        input = Input(shape=input_shape)
-        conv1 = _conv_bn_relu(filters=64, kernel_size=(7, 7), strides=(2, 2))(input)
+        input_data = Input(shape=input_shape)
+        conv1 = _conv_bn_relu(filters=64, kernel_size=(7, 7), strides=(2, 2))(input_data)
         pool1 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2), padding="same")(conv1)
 
         block = pool1
@@ -228,7 +228,7 @@ class ResnetBuilder(object):
         dense = Dense(units=num_outputs, kernel_initializer="he_normal",
                       activation="softmax")(flatten1)
 
-        model = Model(inputs=input, outputs=dense)
+        model = Model(inputs=input_data, outputs=dense)
         return model
 
     @staticmethod
